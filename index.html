@@ -132,8 +132,16 @@
 
         <!-- Load Questions Section -->
         <div class="row mb-3 align-items-center">
-            <div class="col-md-12">
+            <div class="col-md-6">
                 <h2 class="text-secondary mb-0">Questions View</h2>
+            </div>
+            <div class="col-md-6">
+                <div class="input-group">
+                    <span class="input-group-text">Chapter ID</span>
+                    <input type="number" id="load-chapter-id" class="form-control" placeholder="Enter Chapter ID">
+                    <button class="btn btn-primary" type="button" onclick="handleLoadQuestions()">Load
+                        Questions</button>
+                </div>
             </div>
         </div>
         <div id="questions-list"></div>
@@ -145,10 +153,157 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
 
-    <script type="module">
-        import { data } from './const.js';
+    <script>
+        // --- 1. API Configuration ---
+        const API_BASE_URL = 'https://cmsapis.acadally.com';  // Update this if your API runs on a different port
 
-        // --- 1. Helper function to render content (handles text and image data) ---
+        // --- 2. Function to fetch quiz data from API ---
+        async function fetchQuizData(chapterId) {
+            setLoading(true, false);
+            try {
+                let response;
+                if (!chapterId || chapterId === 0) {
+                    response = await fetch(`${API_BASE_URL}/get_quizzes`);
+                } else {
+                    response = await fetch(`${API_BASE_URL}/get_quizzes?chapter_id=${chapterId}`);
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Error fetching quiz data:', error);
+                return null;
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // --- Global Questions Store ---
+        let allQuestions = [];
+
+        // --- Loader & UI State Management ---
+        // --- Loader & UI State Management ---
+        function setLoading(isLoading, isGenerating = false) {
+            const btn = document.getElementById('generate-btn');
+            const allButtons = document.querySelectorAll('button');
+
+            if (isLoading) {
+                // Disable all buttons
+                allButtons.forEach(b => b.disabled = true);
+                if (isGenerating && btn) {
+                    const spinner = btn.querySelector('.spinner-border');
+                    const btnText = btn.querySelector('.btn-text');
+                    if (spinner) spinner.classList.remove('d-none');
+                    if (btnText) btnText.textContent = 'Generating...';
+                }
+            } else {
+                // Enable all buttons
+                allButtons.forEach(b => b.disabled = false);
+                if (btn) {
+                    const spinner = btn.querySelector('.spinner-border');
+                    const btnText = btn.querySelector('.btn-text');
+                    if (spinner) spinner.classList.add('d-none');
+                    if (btnText) btnText.textContent = 'Generate Questions';
+                }
+            }
+        }
+
+        // --- Generate Quiz Handler ---
+        async function handleGenerateQuiz(event) {
+            event.preventDefault();
+
+            const formData = new FormData(event.target);
+            const payload = {
+                board: formData.get('board'),
+                grade: formData.get('grade'),
+                subject: formData.get('subject'),
+                chapter_name: formData.get('chapter_name'),
+                chapter_id: parseInt(formData.get('chapter_id')),
+                num_questions: parseInt(formData.get('num_questions')),
+                additional_instructions: formData.get('additional_instructions') || "None",
+                // defaults
+                question_types: null,
+                difficulty_distribution: null,
+            };
+
+            setLoading(true, true);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/v1/generate-quiz`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(`Generation failed: ${response.statusText}`);
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('Questions generated successfully! Refreshing list...');
+
+                    // Update the load input
+                    const chId = payload.chapter_id;
+                    const inputEl = document.getElementById('load-chapter-id');
+                    if (inputEl) inputEl.value = chId;
+
+                    // Reload questions for this chapter
+                    await loadAndRenderQuestions(chId);
+                } else {
+                    alert(`Error: ${result.message}`);
+                }
+
+            } catch (error) {
+                console.error('Generation error:', error);
+                alert(`Generation failed: ${error.message}`);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // --- Load Logic ---
+        async function handleLoadQuestions() {
+            const chapterIdInput = document.getElementById('load-chapter-id').value;
+            console.log(chapterIdInput);
+            if (!chapterIdInput) {
+                await loadAndRenderQuestions(0);
+            }
+            const chapterId = parseInt(chapterIdInput);
+            await loadAndRenderQuestions(chapterId);
+        }
+
+        async function loadAndRenderQuestions(chapterId) {
+            let data;
+            if (!chapterId || chapterId === 0) {
+                data = await fetchQuizData();
+            } else {
+                data = await fetchQuizData(chapterId);
+            }
+
+            if (!data || !data.success) {
+                document.getElementById('quiz-details-container').innerHTML =
+                    '<div class="alert alert-danger">Failed to load quiz data. Check console for errors.</div>';
+                document.getElementById('questions-list').innerHTML =
+                    '<div class="alert alert-warning">Unable to fetch questions. Ensure backend is running and Chapter ID is correct.</div>';
+                return;
+            }
+
+            if (data.quizzes) {
+                allQuestions = data.quizzes; // Store in global
+                renderMetadata(allQuestions);
+                renderQuestions(allQuestions);
+            } else {
+                allQuestions = [];
+                document.getElementById('quiz-details-container').innerHTML = '';
+                document.getElementById('questions-list').innerHTML =
+                    `<div class="alert alert-info">No questions found for Chapter ID: ${chapterId}</div>`;
+            }
+        }
+
+        // --- 3. Helper function to render content (handles text and image data) ---
         function renderContent(contentArray) {
             if (!contentArray) return '';
             let html = '';
@@ -179,13 +334,13 @@
             return html;
         }
 
-        // --- 2. Function to render the questions ---
+        // --- 4. Function to render the questions ---
         function renderQuestions(questions) {
             const listContainer = document.getElementById('questions-list');
             listContainer.innerHTML = '';
 
             if (!questions || questions.length === 0) {
-                listContainer.innerHTML = '<div class="alert alert-info">No questions found.</div>';
+                listContainer.innerHTML = '<div class="alert alert-info">No questions found in the database.</div>';
                 return;
             }
 
@@ -241,22 +396,23 @@
             });
 
             // After all content is added to the DOM, run KaTeX auto-rendering
-            if (typeof renderMathInElement !== 'undefined') {
-                renderMathInElement(listContainer, {
-                    delimiters: [
-                        { left: '$$', right: '$$', display: true },
-                        { left: '$', right: '$', display: false },
-                    ],
-                });
-            }
+            renderMathInElement(listContainer, {
+                delimiters: [
+                    { left: '$$', right: '$$', display: true },
+                    { left: '$', right: '$', display: false },
+                ],
+            });
         }
 
-        // --- 3. Function to render quiz metadata ---
+        // --- 5. Function to render quiz metadata ---
         function renderMetadata(questions) {
             const container = document.getElementById('quiz-details-container');
 
             const totalQuestions = questions.length;
             const totalMarks = questions.reduce((sum, q) => sum + (q.total_marks || 0), 0);
+
+            // Since we receive a flat list of questions, we don't have global verification status or generation time.
+            // We'll display the aggregate stats.
 
             container.innerHTML = `
                 <div class="metadata-card border">
@@ -273,15 +429,11 @@
             `;
         }
 
-        // --- 4. Initial rendering call ---
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log("Admin UI Ready. Loading data from const.js...");
-            if (data) {
-                renderMetadata(data);
-                renderQuestions(data);
-            } else {
-                console.error("No data imported from const.js");
-            }
+        // --- 6. Initial rendering call ---
+        // --- 6. Initial rendering call ---
+        // --- 6. Initial rendering call ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log("Admin UI Ready. Enter a Chapter ID to load questions.");
         });
     </script>
 </body>
